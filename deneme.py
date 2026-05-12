@@ -1,3 +1,4 @@
+import re
 import streamlit as st
 import plotly.express as px
 import pandas as pd
@@ -31,6 +32,7 @@ def veri_topla(sayfa_sayisi=5):
             desc_tag = a.select_one(".complaint-description")
             user_tag = a.select_one(".username")
             time_tag = a.select_one(".post-time .time")
+            view_tag = a.select_one(".js-view-count")
 
             if not title_tag:
                 continue
@@ -42,6 +44,11 @@ def veri_topla(sayfa_sayisi=5):
             body = body.replace("...", "").strip()
             user = user_tag.text.strip() if user_tag else ""
             date = time_tag.get("title", time_tag.text.strip()) if time_tag else ""
+
+            view_text = view_tag.text.strip() if view_tag else ""
+            view_digits = re.sub(r"[^0-9]", "", view_text)
+            view_count = int(view_digits) if view_digits else 0
+            interaction = view_count if view_count > 0 else max(len(body) // 10, 1)
 
             sentiment = TextBlob(body).sentiment if body else TextBlob("").sentiment
             polarity = round(sentiment.polarity, 4)
@@ -55,6 +62,7 @@ def veri_topla(sayfa_sayisi=5):
                 "Kullanıcı": user,
                 "URL": full_url,
                 "Kategori": kategori_tespit(body),
+                "Etkileşim": interaction,
                 "Polarity": polarity,
                 "Subjectivity": subjectivity,
                 "Sentiment": sentiment_label,
@@ -83,41 +91,42 @@ try:
     if df.empty:
         st.warning("Şu anda veri bulunamadı. Lütfen internet bağlantınızı kontrol edin veya daha sonra tekrar deneyin.")
     else:
+        df["Kategori"] = df["Kategori"].fillna("Diğer")
+
         st.markdown("### 📌 Gerçek Vodafone Şikayetleri ve TextBlob Analizi")
 
-        kategori_ozet = df["Kategori"].value_counts().reset_index()
-        kategori_ozet.columns = ["Kategori", "Sayı"]
+        kategori_ozet = df["Kategori"].value_counts().reset_index(name="Sayı")
+        sentiment_ozet = df["Sentiment"].value_counts().reset_index(name="Sayı")
+        top_interaction = df.sort_values(by="Etkileşim", ascending=False).head(5)
 
-        sentiment_ozet = df["Sentiment"].value_counts().reset_index()
-        sentiment_ozet.columns = ["Duygu", "Sayı"]
+        col1, col2 = st.columns([3, 1])
 
-        fig = px.bar(kategori_ozet, x="Kategori", y="Sayı", color="Kategori",
-                     text_auto=True, template="plotly_dark")
-        st.plotly_chart(fig, width='stretch')
+        with col1:
+            st.markdown("#### Kategori Bazlı Şikayetler")
+            fig = px.bar(kategori_ozet, x="Kategori", y="Sayı", color="Kategori",
+                         text_auto=True, template="plotly_dark")
+            st.plotly_chart(fig, width='stretch')
 
-        st.markdown("### 📈 Sentiment Dağılımı")
-        st.bar_chart(sentiment_ozet.set_index("Duygu"), width='stretch')
+            st.markdown("#### Kategoriye Göre Şikayet Listesi")
+            secilen_kategori = st.selectbox("İncelemek için bir kategori seçin:", kategori_ozet["Kategori"].tolist())
+            fil_df = df[df["Kategori"] == secilen_kategori].reset_index(drop=True)
 
-        st.markdown("### 📋 Çekilen Şikayet Verileri")
-        st.dataframe(df[["Tarih", "Kullanıcı", "Başlık", "Metin", "Kategori", "Sentiment", "Polarity", "Subjectivity"]].head(120), width='stretch')
+            st.write(f"{secilen_kategori} kategorisinde toplam {len(fil_df)} şikayet bulundu.")
+            for idx, row in fil_df.head(20).iterrows():
+                with st.expander(f"{idx + 1}. {row['Başlık'][:90]}"):
+                    st.write(row["Metin"])
+                    st.write(f"**Etkileşim:** {row['Etkileşim']}  |  **Duygu:** {row['Sentiment']}  |  **Tarih:** {row['Tarih']}")
+                    st.write(row["URL"])
 
-        st.markdown("### 🔎 En Negatif ve En Pozitif Şikayetler")
-        en_negatif = df.nsmallest(3, "Polarity")
-        en_pozitif = df.nlargest(3, "Polarity")
+        with col2:
+            st.markdown("#### 🔥 En Çok Etkileşim Alan Şikayetler")
+            st.table(top_interaction[["Başlık", "Kategori", "Etkileşim", "Sentiment"]].rename(columns={"Başlık": "Şikayet", "Etkileşim": "Etkileşim"}))
 
-        with st.expander("En Negatif Şikayetler"):
-            for _, row in en_negatif.iterrows():
-                st.write(f"**{row['Başlık']}** — {row['Polarity']} / {row['Subjectivity']}")
-                st.write(row['Metin'])
-                st.write(row['URL'])
-                st.divider()
+            st.markdown("#### 📈 Sentiment Dağılımı")
+            st.bar_chart(sentiment_ozet.set_index("Duygu"), width='stretch')
 
-        with st.expander("En Pozitif Şikayetler"):
-            for _, row in en_pozitif.iterrows():
-                st.write(f"**{row['Başlık']}** — {row['Polarity']} / {row['Subjectivity']}")
-                st.write(row['Metin'])
-                st.write(row['URL'])
-                st.divider()
+        st.markdown("### 📋 Tüm Çekilen Şikayetler")
+        st.dataframe(df[["Tarih", "Kullanıcı", "Başlık", "Metin", "Kategori", "Etkileşim", "Sentiment", "Polarity", "Subjectivity", "URL"]], width='stretch')
 
 except Exception as e:
     st.error(f"Bir hata oluştu: {e}")
